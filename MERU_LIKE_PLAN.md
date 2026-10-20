@@ -78,14 +78,15 @@ Goal: keep models and indexes warm.
 - Daemon owns index updates, model calls, and logs.
 - Startup becomes fast because the CLI only connects to the daemon.
 
-## Milestone 4: Hybrid Search
+## Milestone 4: Hybrid Search (Completed)
 
 Goal: combine keyword search and semantic search.
 
-- Keep SQLite FTS5 BM25 for exact keywords.
-- Add Ollama embeddings, for example `nomic-embed-text`.
-- Store vectors locally.
-- Merge keyword and vector results with simple rank fusion.
+- [x] Keep SQLite FTS5 BM25 for exact keywords.
+- [x] Add Ollama embeddings via `nomic-embed-text` (`embeddings.py`).
+- [x] Store vectors locally in SQLite `chunk_embeddings`.
+- [x] Merge keyword and vector results with Reciprocal Rank Fusion (RRF).
+- [x] Support hybrid, semantic, and BM25 modes across CLI and MCP tools.
 
 This is the point where search starts feeling more like "find what I meant", not just "find these words".
 

@@ -203,10 +203,11 @@ class MCPManager:
             from searchlocal import connect, search_index, DEFAULT_DB
             query = args.get("query", "")
             limit = int(args.get("limit", 6))
+            mode = args.get("mode", "hybrid")
             db_path = Path(args.get("db_path", DEFAULT_DB))
             if not db_path.exists():
                 return f"Index database does not exist at {db_path}. Please run `searchlocal index` first."
-            hits = search_index(db_path, query, limit)
+            hits = search_index(db_path, query, limit=limit, mode=mode)
             if not hits:
                 return f"No indexed content matches found for query: '{query}'."
             parts = []
@@ -217,7 +218,7 @@ class MCPManager:
                     (hit.path, hit.chunk_index),
                 ).fetchone()
                 content = row[0] if row else hit.snippet
-                parts.append(f"[{i}] {hit.path}#chunk-{hit.chunk_index}\n{content}")
+                parts.append(f"[{i}] {hit.path}#chunk-{hit.chunk_index} (score: {hit.rank:.4f})\n{content}")
             return "\n\n---\n\n".join(parts)
 
         def _tool_read_file(args: dict[str, Any]) -> str:
@@ -261,12 +262,13 @@ class MCPManager:
         builtins = [
             MCPTool(
                 name="search_index",
-                description="Search the local SQLite FTS index of indexed documents, code, and notes using BM25 keyword matching.",
+                description="Search the local SQLite index of indexed documents, code, and notes using hybrid semantic & BM25 keyword matching.",
                 parameters={
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "Search terms or keywords"},
+                        "query": {"type": "string", "description": "Search terms or concept"},
                         "limit": {"type": "integer", "description": "Max chunks to retrieve (default: 6)"},
+                        "mode": {"type": "string", "enum": ["hybrid", "bm25", "semantic"], "description": "Search mode (default: hybrid)"},
                     },
                     "required": ["query"],
                 },

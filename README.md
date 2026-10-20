@@ -47,10 +47,19 @@ python3 searchlocal.py index ~ --max-size-mb 10
 
 By default it skips hidden folders, common dependency/cache folders, and large media-heavy folders such as `Library`, `Applications`, `Movies`, `Music`, and `Pictures`.
 
-## 4. Search
+## 4. Search (Hybrid, Semantic & BM25)
+
+SearchLocal combines exact keyword search (BM25) with vector embeddings (`nomic-embed-text`) using **Reciprocal Rank Fusion (RRF)**:
 
 ```bash
-python3 searchlocal.py search "invoice april" --spotlight
+# Default: Hybrid search (BM25 + Semantic Embeddings)
+python3 searchlocal.py search "residential rent agreement"
+
+# Semantic search only (pure vector similarity)
+python3 searchlocal.py search "compensation and equity benefits" --mode semantic
+
+# Keyword BM25 search only (exact token matching)
+python3 searchlocal.py search "invoice april" --mode bm25 --spotlight
 ```
 
 `--spotlight` also asks macOS Spotlight for filename matches.

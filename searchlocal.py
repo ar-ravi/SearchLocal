@@ -21,6 +21,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from embeddings import (
+    DEFAULT_EMBED_MODEL,
+    compute_cosine_similarities,
+    get_batch_embeddings,
+    get_embedding,
+    pack_embedding,
+    reciprocal_rank_fusion,
+    unpack_embedding,
+)
 
 DEFAULT_DB = Path.home() / ".searchlocal" / "index.db"
 DEFAULT_MODEL = "phi4"
@@ -125,6 +134,18 @@ def connect(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunk_embeddings (
+            path TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            model TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (path, chunk_index, model)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_path ON chunk_embeddings(path)")
     return conn
 
 
@@ -290,11 +311,26 @@ def index_roots(args: argparse.Namespace) -> None:
             continue
 
         conn.execute("DELETE FROM chunks WHERE path = ?", (str(path),))
-        for chunk_index, chunk in enumerate(chunk_text(text)):
+        conn.execute("DELETE FROM chunk_embeddings WHERE path = ?", (str(path),))
+        chunks = chunk_text(text)
+        for chunk_index, chunk in enumerate(chunks):
             conn.execute(
                 "INSERT INTO chunks(path, chunk_index, content) VALUES (?, ?, ?)",
                 (str(path), chunk_index, chunk),
             )
+
+        # Generate local vector embeddings
+        if not getattr(args, "no_embed", False) and chunks:
+            embed_model = getattr(args, "embed_model", DEFAULT_EMBED_MODEL)
+            ollama_url = getattr(args, "ollama_url", DEFAULT_OLLAMA_URL)
+            embeddings = get_batch_embeddings(chunks, model=embed_model, base_url=ollama_url)
+            if embeddings and len(embeddings) == len(chunks):
+                for chunk_index, emb in enumerate(embeddings):
+                    conn.execute(
+                        "INSERT OR REPLACE INTO chunk_embeddings(path, chunk_index, model, embedding) VALUES (?, ?, ?, ?)",
+                        (str(path), chunk_index, embed_model, pack_embedding(emb)),
+                    )
+
         conn.execute(
             """
             INSERT INTO files(path, mtime, size, indexed_at)
@@ -307,7 +343,7 @@ def index_roots(args: argparse.Namespace) -> None:
             (str(path), stat.st_mtime, stat.st_size, time.time()),
         )
         indexed += 1
-        if indexed % 100 == 0:
+        if indexed % 50 == 0:
             conn.commit()
             print(f"indexed {indexed} files...")
 
@@ -324,7 +360,7 @@ def fts_query(query: str) -> str:
     return " OR ".join(f'"{term}"' for term in terms)
 
 
-def search_index(db_path: Path, query: str, limit: int) -> list[SearchHit]:
+def search_bm25(db_path: Path, query: str, limit: int) -> list[SearchHit]:
     conn = connect(db_path)
     rows = conn.execute(
         """
@@ -343,6 +379,94 @@ def search_index(db_path: Path, query: str, limit: int) -> list[SearchHit]:
     return [SearchHit(path=row[0], chunk_index=row[1], snippet=row[2], rank=row[3]) for row in rows]
 
 
+def search_semantic(
+    db_path: Path,
+    query: str,
+    limit: int = 8,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> list[SearchHit]:
+    q_vec = get_embedding(query, model=embed_model, base_url=ollama_url)
+    if not q_vec:
+        return []
+
+    conn = connect(db_path)
+    rows = conn.execute(
+        "SELECT path, chunk_index, embedding FROM chunk_embeddings WHERE model = ?",
+        (embed_model,),
+    ).fetchall()
+    if not rows:
+        return []
+
+    matrix = [unpack_embedding(row[2]) for row in rows]
+    sims = compute_cosine_similarities(q_vec, matrix)
+
+    scored = []
+    for idx, sim in enumerate(sims):
+        scored.append((rows[idx][0], rows[idx][1], float(sim)))
+
+    scored.sort(key=lambda x: x[2], reverse=True)
+    top = scored[:limit]
+
+    hits = []
+    for path, chunk_idx, sim in top:
+        chunk_row = conn.execute(
+            "SELECT content FROM chunks WHERE path = ? AND chunk_index = ?",
+            (path, chunk_idx),
+        ).fetchone()
+        content = chunk_row[0] if chunk_row else ""
+        snippet = (content[:200] + "...") if len(content) > 200 else content
+        hits.append(SearchHit(path=path, chunk_index=chunk_idx, snippet=snippet, rank=sim))
+    return hits
+
+
+def search_hybrid(
+    db_path: Path,
+    query: str,
+    limit: int = 8,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> list[SearchHit]:
+    bm25_hits = search_bm25(db_path, query, limit=limit * 2)
+    semantic_hits = search_semantic(db_path, query, limit=limit * 2, embed_model=embed_model, ollama_url=ollama_url)
+
+    if not semantic_hits:
+        return bm25_hits[:limit]
+    if not bm25_hits:
+        return semantic_hits[:limit]
+
+    bm25_pairs = [(h.path, h.chunk_index) for h in bm25_hits]
+    sem_pairs = [(h.path, h.chunk_index) for h in semantic_hits]
+
+    fused = reciprocal_rank_fusion(bm25_pairs, sem_pairs, k=60, limit=limit)
+    conn = connect(db_path)
+    hits = []
+    for path, chunk_idx, rrf_score in fused:
+        row = conn.execute(
+            "SELECT content FROM chunks WHERE path = ? AND chunk_index = ?",
+            (path, chunk_idx),
+        ).fetchone()
+        content = row[0] if row else ""
+        snippet = (content[:200] + "...") if len(content) > 200 else content
+        hits.append(SearchHit(path=path, chunk_index=chunk_idx, snippet=snippet, rank=rrf_score))
+    return hits
+
+
+def search_index(
+    db_path: Path,
+    query: str,
+    limit: int = 8,
+    mode: str = "hybrid",
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> list[SearchHit]:
+    if mode == "semantic":
+        return search_semantic(db_path, query, limit, embed_model=embed_model, ollama_url=ollama_url)
+    elif mode == "bm25":
+        return search_bm25(db_path, query, limit)
+    return search_hybrid(db_path, query, limit, embed_model=embed_model, ollama_url=ollama_url)
+
+
 def search_filenames_with_spotlight(query: str, limit: int) -> list[str]:
     try:
         result = subprocess.run(
@@ -358,14 +482,19 @@ def search_filenames_with_spotlight(query: str, limit: int) -> list[str]:
 
 
 def print_search(args: argparse.Namespace) -> None:
-    hits = search_index(args.db, args.query, args.limit)
+    mode = getattr(args, "mode", "hybrid")
+    embed_model = getattr(args, "embed_model", DEFAULT_EMBED_MODEL)
+    ollama_url = getattr(args, "ollama_url", DEFAULT_OLLAMA_URL)
+
+    hits = search_index(args.db, args.query, args.limit, mode=mode, embed_model=embed_model, ollama_url=ollama_url)
     if hits:
-        print("Content matches:")
+        print(f"Content matches ({mode.upper()} mode):")
         for i, hit in enumerate(hits, 1):
-            print(f"\n{i}. {hit.path}#chunk-{hit.chunk_index}")
+            score_label = f"score: {hit.rank:.4f}"
+            print(f"\n{i}. {hit.path}#chunk-{hit.chunk_index} ({score_label})")
             print(f"   {hit.snippet}")
     else:
-        print("No content matches found.")
+        print(f"No content matches found using {mode.upper()} search.")
 
     if args.spotlight:
         names = search_filenames_with_spotlight(args.query, args.limit)
@@ -375,8 +504,15 @@ def print_search(args: argparse.Namespace) -> None:
                 print(f"{i}. {path}")
 
 
-def build_context(db_path: Path, query: str, limit: int) -> tuple[str, list[SearchHit]]:
-    hits = search_index(db_path, query, limit)
+def build_context(
+    db_path: Path,
+    query: str,
+    limit: int,
+    mode: str = "hybrid",
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> tuple[str, list[SearchHit]]:
+    hits = search_index(db_path, query, limit, mode=mode, embed_model=embed_model, ollama_url=ollama_url)
     parts = []
     conn = connect(db_path)
     for i, hit in enumerate(hits, 1):
@@ -455,7 +591,16 @@ def ask(args: argparse.Namespace) -> None:
     if getattr(args, "agent", False):
         return agent_command(args)
 
-    context, hits = build_context(args.db, args.question, args.limit)
+    mode = getattr(args, "mode", "hybrid")
+    embed_model = getattr(args, "embed_model", DEFAULT_EMBED_MODEL)
+    context, hits = build_context(
+        args.db,
+        args.question,
+        args.limit,
+        mode=mode,
+        embed_model=embed_model,
+        ollama_url=args.ollama_url,
+    )
     if not context:
         print("I could not find indexed content for that question.")
         if args.spotlight:
@@ -479,15 +624,17 @@ Local file context:
     print(answer)
     print("\nSources:")
     for i, hit in enumerate(hits, 1):
-        print(f"{i}. {hit.path}#chunk-{hit.chunk_index}")
+        print(f"{i}. {hit.path}#chunk-{hit.chunk_index} (score: {hit.rank:.4f})")
 
 
 def stats(args: argparse.Namespace) -> None:
     conn = connect(args.db)
     file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
     chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    emb_count = conn.execute("SELECT COUNT(*) FROM chunk_embeddings").fetchone()[0]
     print(f"files: {file_count}")
     print(f"chunks: {chunk_count}")
+    print(f"embeddings: {emb_count}")
     print(f"database: {args.db}")
 
 
@@ -497,22 +644,30 @@ def make_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(required=True)
 
-    p_index = sub.add_parser("index", help="Index local files")
+    p_index = sub.add_parser("index", help="Index local files and generate embeddings")
     p_index.add_argument("roots", nargs="+", help="Files or folders to index")
     p_index.add_argument("--max-size-mb", type=int, default=10, help="Skip files larger than this")
     p_index.add_argument("--include-hidden", action="store_true", help="Include hidden files and folders")
     p_index.add_argument("--force", action="store_true", help="Reindex unchanged files")
+    p_index.add_argument("--no-embed", action="store_true", help="Disable generating vector embeddings")
+    p_index.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL, help=f"Embedding model (default: {DEFAULT_EMBED_MODEL})")
+    p_index.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     p_index.set_defaults(func=index_roots)
 
-    p_search = sub.add_parser("search", help="Search indexed file contents")
+    p_search = sub.add_parser("search", help="Search indexed file contents (hybrid, bm25, or semantic)")
     p_search.add_argument("query")
     p_search.add_argument("--limit", type=int, default=8)
+    p_search.add_argument("--mode", choices=["hybrid", "bm25", "semantic"], default="hybrid", help="Search mode (default: hybrid)")
+    p_search.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL, help=f"Embedding model (default: {DEFAULT_EMBED_MODEL})")
+    p_search.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     p_search.add_argument("--spotlight", action="store_true", help="Also search filenames with macOS Spotlight")
     p_search.set_defaults(func=print_search)
 
     p_ask = sub.add_parser("ask", help="Ask Ollama a question using retrieved local context or MCP agent loop")
     p_ask.add_argument("question")
     p_ask.add_argument("--limit", type=int, default=6)
+    p_ask.add_argument("--mode", choices=["hybrid", "bm25", "semantic"], default="hybrid", help="Search mode (default: hybrid)")
+    p_ask.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL)
     p_ask.add_argument("--model", default=DEFAULT_MODEL)
     p_ask.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     p_ask.add_argument("--spotlight", action="store_true", help="Show Spotlight filename matches if no content matches")
