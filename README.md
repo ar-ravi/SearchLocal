@@ -55,16 +55,45 @@ python3 searchlocal.py search "invoice april" --spotlight
 
 `--spotlight` also asks macOS Spotlight for filename matches.
 
-## 5. Ask the agent
+## 5. Ask with Autonomous MCP Agent (Multi-Tool Calling)
+
+SearchLocal can run as an **autonomous agent** that connects to local MCP servers (such as `@modelcontextprotocol/server-filesystem`) and built-in search tools:
 
 ```bash
-python3 searchlocal.py ask "Where did I write about the Q3 launch plan?"
+python3 searchlocal.py agent "What projects are inside /Users/ravi/Desktop/Workspace?"
 ```
 
-Use a different local Ollama model:
+Inspect all active tools from connected MCP servers and built-in tools:
 
 ```bash
-python3 searchlocal.py ask "Summarize my notes on project Atlas" --model phi4
+python3 searchlocal.py tools
+```
+
+Or run `ask` with the `--agent` flag:
+
+```bash
+python3 searchlocal.py ask "Find my Amazon resume and summarize my experience" --agent
+```
+
+### Configuring Local MCP Servers
+
+SearchLocal reads MCP server configurations from `~/.searchlocal/mcp_config.json` (see [`mcp_config.example.json`](mcp_config.example.json)):
+
+```json
+{
+  "mcp_servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/ravi/Desktop",
+        "/Users/ravi/Documents",
+        "/Users/ravi/Downloads"
+      ]
+    }
+  }
+}
 ```
 
 ## 6. Check index size

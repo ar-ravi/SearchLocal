@@ -23,7 +23,7 @@ from typing import Iterable
 
 
 DEFAULT_DB = Path.home() / ".searchlocal" / "index.db"
-DEFAULT_MODEL = "llama3.2"
+DEFAULT_MODEL = "phi4"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
 TEXT_EXTENSIONS = {
@@ -413,7 +413,48 @@ def ollama_generate(base_url: str, model: str, prompt: str) -> str:
         )
 
 
+def agent_command(args: argparse.Namespace) -> None:
+    from mcp_client import MCPAgent, MCPManager, DEFAULT_CONFIG_PATH
+
+    config_path = args.config if args.config else DEFAULT_CONFIG_PATH
+    mcp = MCPManager(config_path=config_path)
+    if not args.no_mcp:
+        mcp.load_config()
+
+    try:
+        agent = MCPAgent(mcp, model=args.model, ollama_url=args.ollama_url)
+        print(f"[*] Starting SearchLocal MCP Agent ({args.model}) with {len(mcp.tools)} active tools...\n")
+        answer = agent.run(args.question, max_turns=args.max_turns)
+        print("\n" + "=" * 48)
+        print("Final Answer:")
+        print("=" * 48)
+        print(answer)
+    finally:
+        mcp.close()
+
+
+def tools_command(args: argparse.Namespace) -> None:
+    from mcp_client import MCPManager, DEFAULT_CONFIG_PATH
+
+    config_path = args.config if args.config else DEFAULT_CONFIG_PATH
+    mcp = MCPManager(config_path=config_path)
+    if not args.no_mcp:
+        mcp.load_config()
+
+    try:
+        print(f"\nActive SearchLocal Tools ({len(mcp.tools)} total):\n")
+        for name, t in sorted(mcp.tools.items()):
+            source = f"[{t.server_name}]"
+            print(f"  • {name:<35} {source:<12} {t.description}")
+        print()
+    finally:
+        mcp.close()
+
+
 def ask(args: argparse.Namespace) -> None:
+    if getattr(args, "agent", False):
+        return agent_command(args)
+
     context, hits = build_context(args.db, args.question, args.limit)
     if not context:
         print("I could not find indexed content for that question.")
@@ -451,7 +492,7 @@ def stats(args: argparse.Namespace) -> None:
 
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="SearchLocal: local Ollama-powered Mac search")
+    parser = argparse.ArgumentParser(description="SearchLocal: local Ollama-powered Mac search & MCP agent")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help=f"SQLite index path (default: {DEFAULT_DB})")
 
     sub = parser.add_subparsers(required=True)
@@ -469,13 +510,31 @@ def make_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--spotlight", action="store_true", help="Also search filenames with macOS Spotlight")
     p_search.set_defaults(func=print_search)
 
-    p_ask = sub.add_parser("ask", help="Ask Ollama a question using retrieved local context")
+    p_ask = sub.add_parser("ask", help="Ask Ollama a question using retrieved local context or MCP agent loop")
     p_ask.add_argument("question")
     p_ask.add_argument("--limit", type=int, default=6)
     p_ask.add_argument("--model", default=DEFAULT_MODEL)
     p_ask.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     p_ask.add_argument("--spotlight", action="store_true", help="Show Spotlight filename matches if no content matches")
+    p_ask.add_argument("--agent", action="store_true", help="Run as autonomous MCP agent using local tools")
+    p_ask.add_argument("--config", type=Path, default=None, help="Custom path to mcp_config.json")
+    p_ask.add_argument("--no-mcp", action="store_true", help="Disable external MCP servers and use only built-in tools")
+    p_ask.add_argument("--max-turns", type=int, default=6, help="Maximum agent turns")
     p_ask.set_defaults(func=ask)
+
+    p_agent = sub.add_parser("agent", help="Run autonomous agent using local MCP tools (filesystem, search, spotlight)")
+    p_agent.add_argument("question", help="Question or task for the local agent")
+    p_agent.add_argument("--model", default=DEFAULT_MODEL, help=f"Ollama model (default: {DEFAULT_MODEL})")
+    p_agent.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help=f"Ollama endpoint (default: {DEFAULT_OLLAMA_URL})")
+    p_agent.add_argument("--config", type=Path, default=None, help="Custom path to mcp_config.json")
+    p_agent.add_argument("--no-mcp", action="store_true", help="Disable external MCP servers and use only built-in tools")
+    p_agent.add_argument("--max-turns", type=int, default=6, help="Maximum agent turns (default: 6)")
+    p_agent.set_defaults(func=agent_command)
+
+    p_tools = sub.add_parser("tools", help="List all active tools from built-in engine and connected MCP servers")
+    p_tools.add_argument("--config", type=Path, default=None, help="Custom path to mcp_config.json")
+    p_tools.add_argument("--no-mcp", action="store_true", help="Show only built-in tools")
+    p_tools.set_defaults(func=tools_command)
 
     p_stats = sub.add_parser("stats", help="Show index statistics")
     p_stats.set_defaults(func=stats)

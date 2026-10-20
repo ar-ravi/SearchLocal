@@ -56,23 +56,18 @@ searchlocal ask "question"
 searchlocal stats
 ```
 
-## Milestone 2: Agent Loop
+## Milestone 2: Agent Loop (Completed with MCP)
 
-Goal: let the model choose from a small allowed tool set.
+Goal: let the model choose from allowed local tools via Model Context Protocol (MCP).
 
-Tools:
+Implemented:
 
-- `search_files`
-- `read_file`
-- `list_directory`
-- `spotlight_search`
-- `summarize_sources`
-
-Rules:
-
-- Read-only tools are enabled by default.
-- Anything that writes, deletes, opens apps, sends email, or accesses the web requires explicit opt-in.
-- Every tool call is logged to JSONL.
+- [x] Full MCP client runtime over stdio JSON-RPC 2.0 (`mcp_client.py`).
+- [x] External MCP server integration (`@modelcontextprotocol/server-filesystem`).
+- [x] Built-in local tools (`search_index`, `read_local_file`, `list_directory`, `spotlight_search`).
+- [x] Multi-turn agent loop with local Ollama models (`phi4`, `llama3.2`).
+- [x] Dual-mode execution: Native tool-calling API with automatic fallback to ReAct prompt-based tool execution.
+- [x] CLI commands: `searchlocal agent` and `searchlocal tools`.
 
 ## Milestone 3: Daemon
 
