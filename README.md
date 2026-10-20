@@ -1,8 +1,27 @@
-# SearchLocal
+# Macmate
 
-SearchLocal is a local-first search agent for your Mac. It indexes local text-like files into SQLite full-text search, retrieves relevant snippets, then asks a local Ollama model to answer from those snippets.
+Macmate is evolving SearchLocal into a local assistant for your Mac. The project keeps its local file search and retrieval core while adding a conversational workspace powered by a model running on-device.
 
-It does not send your files to a cloud API.
+The assistant dashboard, Mac health view, and chat endpoint run on loopback. Chat inference is directed to Ollama at `127.0.0.1:11434`; the dashboard does not send prompts to a remote model service or save chat history.
+
+## Run the Macmate local UI
+
+Install and start Ollama, then pull a chat model:
+
+```bash
+ollama pull phi4
+ollama serve
+```
+
+From the repository root, launch the dashboard:
+
+```bash
+python3 searchlocal_web.py
+```
+
+Open <http://127.0.0.1:18765/>. The retro pastel workspace includes a local assistant chat and a Mac health page. Chat and health readings stay in the current browser session; nothing is written by the UI.
+
+The remaining sections below document SearchLocal's existing indexing and retrieval commands.
 
 If you want something MERU-like, read `MERU_LIKE_PLAN.md`. This prototype is the retrieval core: local index, local search, local Ollama answers, and citations.
 
