@@ -64,6 +64,16 @@ TEXT_EXTENSIONS = {
     ".xml",
 }
 
+DOCUMENT_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".rtf",
+    ".odt",
+}
+
+ALL_SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS
+
 SKIP_DIRS = {
     ".git",
     ".hg",
@@ -118,8 +128,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def is_probably_text(path: Path, max_size_mb: int) -> bool:
-    if path.suffix.lower() not in TEXT_EXTENSIONS:
+def is_supported_file(path: Path, max_size_mb: int) -> bool:
+    if path.suffix.lower() not in ALL_SUPPORTED_EXTENSIONS:
         return False
     try:
         return path.stat().st_size <= max_size_mb * 1024 * 1024
@@ -127,10 +137,14 @@ def is_probably_text(path: Path, max_size_mb: int) -> bool:
         return False
 
 
+# Backward compatibility alias
+is_probably_text = is_supported_file
+
+
 def iter_files(roots: Iterable[Path], max_size_mb: int, include_hidden: bool) -> Iterable[Path]:
     for root in roots:
         root = root.expanduser().resolve()
-        if root.is_file() and is_probably_text(root, max_size_mb):
+        if root.is_file() and is_supported_file(root, max_size_mb):
             yield root
             continue
         if not root.exists():
@@ -147,8 +161,69 @@ def iter_files(roots: Iterable[Path], max_size_mb: int, include_hidden: bool) ->
                 if not include_hidden and filename.startswith("."):
                     continue
                 path = current_path / filename
-                if is_probably_text(path, max_size_mb):
+                if is_supported_file(path, max_size_mb):
                     yield path
+
+
+def extract_pdf_text(path: Path) -> str | None:
+    # 1. Try pypdf library
+    try:
+        import pypdf
+
+        reader = pypdf.PdfReader(str(path))
+        pages_text: list[str] = []
+        for idx, page in enumerate(reader.pages):
+            page_content = page.extract_text() or ""
+            page_content = page_content.strip()
+            if page_content:
+                pages_text.append(f"--- Page {idx + 1} ---\n{page_content}")
+        if pages_text:
+            return "\n\n".join(pages_text)
+    except Exception:
+        pass
+
+    # 2. Try CLI pdftotext if installed
+    try:
+        res = subprocess.run(
+            ["pdftotext", str(path), "-"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+
+    return None
+
+
+def extract_docx_text(path: Path) -> str | None:
+    # 1. macOS native textutil (built into macOS, supports docx, doc, rtf, odt)
+    if sys.platform == "darwin":
+        try:
+            res = subprocess.run(
+                ["textutil", "-convert", "txt", "-stdout", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+
+    # 2. Try docx2txt library
+    try:
+        import docx2txt
+
+        text = docx2txt.process(str(path))
+        if text and text.strip():
+            return text.strip()
+    except Exception:
+        pass
+
+    return None
 
 
 def read_text(path: Path) -> str | None:
@@ -164,6 +239,15 @@ def read_text(path: Path) -> str | None:
         except UnicodeDecodeError:
             pass
     return None
+
+
+def read_file_content(path: Path) -> str | None:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return extract_pdf_text(path)
+    if suffix in {".docx", ".doc", ".rtf", ".odt"}:
+        return extract_docx_text(path)
+    return read_text(path)
 
 
 def chunk_text(text: str, chunk_chars: int = 2400, overlap: int = 250) -> list[str]:
@@ -200,7 +284,7 @@ def index_roots(args: argparse.Namespace) -> None:
             skipped += 1
             continue
 
-        text = read_text(path)
+        text = read_file_content(path)
         if not text:
             skipped += 1
             continue

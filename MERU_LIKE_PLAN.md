@@ -39,12 +39,12 @@ searchlocald         background daemon
 
 Goal: make the current CLI genuinely useful.
 
-- Add PDF text extraction.
-- Add DOCX text extraction.
-- Add incremental re-indexing by folder.
-- Add `watch` mode using macOS file events or periodic scans.
-- Add quoted source citations with path and snippet.
-- Add config file for default folders and model.
+- [x] Add PDF text extraction (via `pypdf` with `pdftotext` fallback).
+- [x] Add DOCX text extraction (via native macOS `textutil` with `docx2txt` fallback; also supports `.doc`, `.rtf`, `.odt`).
+- [ ] Add incremental re-indexing by folder.
+- [ ] Add `watch` mode using macOS file events or periodic scans.
+- [ ] Add quoted source citations with path and snippet.
+- [ ] Add config file for default folders and model.
 
 Recommended commands:
 

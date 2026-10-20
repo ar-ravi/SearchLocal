@@ -20,13 +20,23 @@ If Ollama is not already running:
 ollama serve
 ```
 
-## 2. Index folders
+## 2. Setup & Requirements
 
-Start with a specific folder before indexing your whole home directory:
+Install dependencies (for PDF parsing and DOCX fallbacks):
 
 ```bash
-cd /Users/ravi/Documents/Codex/2026-10-12/i-w/outputs/SearchLocal
-python3 searchlocal.py index ~/Documents ~/Desktop
+cd /Users/ravi/Desktop/Workspace/SearchLocal
+pip install -r requirements.txt
+```
+
+*(Note: On macOS, Word `.docx`, `.doc`, `.rtf`, and `.odt` files are converted natively using macOS's built-in `textutil` utility with zero external configuration).*
+
+## 3. Index folders
+
+Start with specific folders (e.g. Documents, Desktop, or Downloads):
+
+```bash
+python3 searchlocal.py index ~/Documents ~/Desktop ~/Downloads
 ```
 
 For a broader index:
@@ -37,7 +47,7 @@ python3 searchlocal.py index ~ --max-size-mb 10
 
 By default it skips hidden folders, common dependency/cache folders, and large media-heavy folders such as `Library`, `Applications`, `Movies`, `Music`, and `Pictures`.
 
-## 3. Search
+## 4. Search
 
 ```bash
 python3 searchlocal.py search "invoice april" --spotlight
@@ -45,7 +55,7 @@ python3 searchlocal.py search "invoice april" --spotlight
 
 `--spotlight` also asks macOS Spotlight for filename matches.
 
-## 4. Ask the agent
+## 5. Ask the agent
 
 ```bash
 python3 searchlocal.py ask "Where did I write about the Q3 launch plan?"
@@ -54,24 +64,18 @@ python3 searchlocal.py ask "Where did I write about the Q3 launch plan?"
 Use a different local Ollama model:
 
 ```bash
-python3 searchlocal.py ask "Summarize my notes on project Atlas" --model mistral
-```
-
-This Mac currently has `phi4:latest` installed, so this should work too:
-
-```bash
 python3 searchlocal.py ask "Summarize my notes on project Atlas" --model phi4
 ```
 
-## 5. Check index size
+## 6. Check index size
 
 ```bash
 python3 searchlocal.py stats
 ```
 
-## Notes
+## Supported Formats & Notes
 
 - The default index database is `~/.searchlocal/index.db`.
-- The indexer currently reads text-oriented files: Markdown, plain text, source code, JSON, YAML, CSV, logs, and similar formats.
-- PDFs, images, Word documents, and emails need extractors before they can be searched by content. macOS Spotlight may still find those by filename.
-- For privacy, index only folders you are comfortable searching. The model receives retrieved snippets from your local index.
+- **Text & Code**: Markdown, plain text, source code (`.py`, `.ts`, `.cpp`, `.go`, `.java`, `.sh`, etc.), JSON, YAML, CSV, SQL, logs.
+- **Documents**: PDF (`.pdf`), Microsoft Word (`.docx`, `.doc`), Rich Text (`.rtf`), and OpenDocument (`.odt`).
+- For privacy, all indexing and Ollama inference run strictly on your local machine. No data leaves your computer.
